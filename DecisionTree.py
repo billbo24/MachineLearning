@@ -10,7 +10,8 @@ after that.
 """
 
 import pandas as pd
-
+import matplotlib.pyplot as plt
+#from sklearn import tree
 
 def get_data():
     #Location of the movie data.  Will look at budget and rotten tomatoes score
@@ -56,6 +57,14 @@ def get_square_error(data,split_field,split_num,output_field):
 
 def segment_on_field(data,field,output_field,min_group_size):
     #This will take a numeric field and determine the best splitting point
+    
+    #Also note that if our group data is less than 2 times the minimum group 
+    #size then we can't split it because one of the resulting groups would be too small
+    if len(data) < 2*min_group_size:
+        print(data,min_group_size)
+        return [False,0,0]
+    
+    
     cur_data = data[[field,output_field]].copy()
     cur_data = cur_data[[field,output_field]].sort_values(by=[field]).copy() #We only need these two fields
     cur_data.reset_index(inplace=True)
@@ -89,11 +98,17 @@ def segment_on_field(data,field,output_field,min_group_size):
             cut = split
     
     #Alright now I think this will give us the value and minimum residual split
-    return min_error,cut
+    return [True,min_error,cut]
 
 
-def split_data(data,fields_of_interest,output_field,depth):
+def split_data(data,fields_of_interest,output_field,depth,min_group_size):
     
+    
+    if len(data) < 2*min_group_size:
+        data[f'level {depth} split'] = 'No Split'
+        
+        return False,data #indicates no split
+     
     #Alright the general Idea here will be to feed it some subset and it will
     #spit out the data with an appended column with the segmentation
     #we'll loop through the columns and whichever one's optimal split gives 
@@ -102,27 +117,92 @@ def split_data(data,fields_of_interest,output_field,depth):
     error = pow(10,100)
     key_field = ''
     key_cut = 0
+    my_bool = False
+    
     for field in fields_of_interest:
-        square_residual,value_cut = segment_on_field(data,field,output_field,10)
+        my_bool,square_residual,value_cut = segment_on_field(data,field,output_field,min_group_size)
+        print(field,value_cut,square_residual)
+        if my_bool == False: #This is in case our dataset was too small and we can't split it
+            continue
+        
         if square_residual < error: #New champ baby
             error = square_residual
             key_field = field
             key_cut = value_cut
     
-    print(key_field,key_cut)
+    #print(key_field,key_cut)
     true_string = f"{key_field} > {key_cut}"
     false_string = f"{key_field} <= {key_cut}"
-    data[f'level {depth} split'] = data[key_field].apply(lambda x: true_string if x > key_cut else false_string)
+    data[f'level {depth} split'] = data[key_field].apply(lambda x: true_string if x > key_cut else false_string).copy()
     
-    return data
+    return True,data
 
+
+
+#Next step here is to put in a...recursion function? I'd like to essentially
+#Tell it to split the data, and then look at the left over populations 
+#and just do the same thing
+
+def get_full_tree(data,variables,y_var,cur_depth,max_depth,min_group_size):
     
+    #Think of cur depth as which depth we're searching for
+    
+    if cur_depth > max_depth:
+        #we've gone too far lol
+        return data
+    
+    #print("trying split",len(data))
+    #Alright now we take the current dataset we have and split it
+    recurse_bool,temp = split_data(data,important_vars,y_var,cur_depth,min_group_size)
+    
+    
+    #temp now has a new column.  That being said if our recursion bool 
+    #is false then we didn't split.  no recurusive step
+    
+    if recurse_bool:
+        #We now need to hit both of the new datasets with our recursion
+        indices = temp[f'level {cur_depth} split'].unique().tolist() #gives us the distinct values
+        #print(indices)
+        
+        left = temp.loc[temp[f'level {cur_depth} split']==indices[0]].copy()
+        right = temp.loc[temp[f'level {cur_depth} split']==indices[1]].copy()
+        
+        nu_left = get_full_tree(left,important_vars,y_var,cur_depth+1,max_depth,min_group_size)
+        nu_right = get_full_tree(right,important_vars,y_var,cur_depth+1,max_depth,min_group_size)
+        
+        temp = pd.concat([nu_left,nu_right]).copy()
+        
+    return temp #I think this should do it
+
+
 
 #Going to attempt to figure out the 'Domestic gross ($m)' column
 MyData = get_data()
 
-#I really only care about a handful of these variables
-important_vars = ['Rotten Tomatoes  critics','Rotten Tomatoes Audience ','Budget ($m)','IMDB Rating']
 
-MyData = split_data(MyData,important_vars,'Domestic gross ($m)',1)
+
+#I really only care about a handful of these variables
+#important_vars = ['Rotten Tomatoes  critics','Rotten Tomatoes Audience ','Budget ($m)','IMDB Rating']
+
+important_vars = ['Rotten Tomatoes  critics','Budget ($m)']
+
+#Alright now this does give us our full tree
+MyData = get_full_tree(MyData,important_vars,'Domestic gross ($m)',1,3,2)
+
+
+
+
+temp1 = MyData.loc[MyData['level 1 split']=='Budget ($m) <= 95.0'].copy()
+temp2 = MyData.loc[MyData['level 1 split']=='Budget ($m) > 95.0'].copy()
+
+fig,ax = plt.subplots()
+
+ax.scatter(x=temp1['Budget ($m)'],y=temp1['Domestic gross ($m)'],color='red',label='little budget')
+ax.scatter(x=temp2['Budget ($m)'],y=temp2['Domestic gross ($m)'],color='blue',label='big budget')
     
+
+ax.set_xlabel('Budget')
+ax.set_ylabel('Gross')
+ax.legend()
+
+plt.show()
